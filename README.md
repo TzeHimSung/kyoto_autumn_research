@@ -10,7 +10,7 @@
 
 - `kyoto_autumn_research_workflow.ipynb`
 
-Notebook 包含完整研究过程：研究问题、数据来源、清洗规则、统计分析、图表和结论。README 只保留项目索引、核心结论和复现说明。
+Notebook 包含完整研究过程：研究问题、数据来源、清洗规则、统计分析、图表和结论。当前版本使用 pandas 与 NumPy 进行数据整理和统计计算，并使用 Matplotlib 与 Seaborn 生成可复核的 SVG 图表。
 
 ## 研究问题
 
@@ -47,6 +47,7 @@ Notebook 包含完整研究过程：研究问题、数据来源、清洗规则�
 ```text
 .
 ├── kyoto_autumn_research_workflow.ipynb
+├── requirements.txt
 ├── data/
 │   ├── raw/
 │   │   └── kyoto_daily_temperature_oct_dec_2010_2025.csv
@@ -61,14 +62,27 @@ Notebook 包含完整研究过程：研究问题、数据来源、清洗规则�
 
 ## 复现方法
 
-本项目只依赖 Python 3 标准库，不需要安装 pandas、NumPy、SciPy 或 matplotlib。
+Notebook 与测试需要科学计算栈：NumPy、pandas、Matplotlib、Seaborn 和 IPython。依赖集中记录在 `requirements.txt`。
+
+推荐使用虚拟环境：
 
 ```bash
-python3 scripts/fetch_and_analyze.py
-python3 -m unittest discover -s tests -v
+python3 -m venv .venv
+.venv/bin/python -m pip install --upgrade pip
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python -m unittest discover -s tests -v
 ```
 
-脚本会重新从气象厅抓取数据并覆盖生成以下 CSV：
+如需重新从气象厅抓取数据并覆盖生成 CSV：
+
+```bash
+.venv/bin/python scripts/fetch_and_analyze.py
+.venv/bin/python -m unittest discover -s tests -v
+```
+
+`fetch_and_analyze.py` 本身仍保持 Python 标准库实现，便于在最小环境中刷新数据；Notebook 负责使用科学计算与画图库进行研究展示。
+
+脚本会重新生成以下 CSV：
 
 - `data/raw/kyoto_daily_temperature_oct_dec_2010_2025.csv`
 - `data/processed/kyoto_koyo_temperature_2010_2025_summary.csv`
@@ -76,9 +90,10 @@ python3 -m unittest discover -s tests -v
 
 ## 文件说明
 
-- `kyoto_autumn_research_workflow.ipynb`：研究正文，包含数据来源、清洗规则、统计计算、图表和结论。
+- `kyoto_autumn_research_workflow.ipynb`：研究正文，包含数据来源、清洗规则、pandas/NumPy 统计计算、Matplotlib/Seaborn 图表和结论。
+- `requirements.txt`：Notebook 与测试所需的科学计算和可视化依赖。
 - `scripts/fetch_and_analyze.py`：抓取、解析、计算并生成 CSV 结果的一体化脚本。
-- `tests/test_outputs.py`：验证官方关键年份、日别气温覆盖范围、相关性方向、Notebook 结构、图表输出和安全约束。
+- `tests/test_outputs.py`：验证官方关键年份、日别气温覆盖范围、相关性方向、Notebook 结构、科学计算栈使用、图表输出和安全约束。
 
 ## 解释边界
 

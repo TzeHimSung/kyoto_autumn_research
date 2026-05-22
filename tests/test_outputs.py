@@ -1,6 +1,8 @@
 import csv
+import importlib
 import json
 import math
+import os
 import re
 import subprocess
 import sys
@@ -13,6 +15,7 @@ SUMMARY = ROOT / "data" / "processed" / "kyoto_koyo_temperature_2010_2025_summar
 DAILY = ROOT / "data" / "raw" / "kyoto_daily_temperature_oct_dec_2010_2025.csv"
 CORRELATIONS = ROOT / "data" / "processed" / "correlation_results.csv"
 NOTEBOOK = ROOT / "kyoto_autumn_research_workflow.ipynb"
+REQUIREMENTS = ROOT / "requirements.txt"
 
 
 def read_csv(path: Path):
@@ -26,9 +29,18 @@ def read_notebook():
 
 class KyotoAutumnOutputsTest(unittest.TestCase):
     def test_expected_artifacts_exist(self):
-        for path in [SUMMARY, DAILY, CORRELATIONS, NOTEBOOK]:
+        for path in [SUMMARY, DAILY, CORRELATIONS, NOTEBOOK, REQUIREMENTS]:
             self.assertTrue(path.exists(), f"missing artifact: {path.relative_to(ROOT)}")
-            self.assertGreater(path.stat().st_size, 100, f"artifact too small: {path.relative_to(ROOT)}")
+            self.assertGreater(path.stat().st_size, 50, f"artifact too small: {path.relative_to(ROOT)}")
+
+    def test_scientific_dependencies_are_declared_and_importable(self):
+        requirements = REQUIREMENTS.read_text(encoding="utf-8")
+        for package in ["numpy", "pandas", "matplotlib", "seaborn", "ipython"]:
+            self.assertIn(package, requirements.lower())
+
+        for module in ["numpy", "pandas", "matplotlib", "seaborn", "IPython"]:
+            with self.subTest(module=module):
+                importlib.import_module(module)
 
     def test_notebook_is_at_repository_root(self):
         self.assertEqual(NOTEBOOK.parent, ROOT)
@@ -77,13 +89,35 @@ class KyotoAutumnOutputsTest(unittest.TestCase):
         self.assertIn("https://www.data.jma.go.jp/sakura/data/ruinenchi/015.csv", markdown)
         self.assertIn("11月28日—12月10日", markdown)
 
-        svg_outputs = 0
+        rich_figure_outputs = 0
         for cell in notebook["cells"]:
             for output in cell.get("outputs", []):
-                html_output = output.get("data", {}).get("text/html", "")
-                if "<svg" in html_output:
-                    svg_outputs += 1
-        self.assertGreaterEqual(svg_outputs, 3)
+                data = output.get("data", {})
+                html_output = data.get("text/html", "")
+                if "image/svg+xml" in data or "image/png" in data or "<svg" in html_output:
+                    rich_figure_outputs += 1
+        self.assertGreaterEqual(rich_figure_outputs, 4)
+
+    def test_notebook_uses_scientific_python_stack(self):
+        notebook = read_notebook()
+        code = "\n".join(
+            "".join(cell.get("source", []))
+            for cell in notebook["cells"]
+            if cell["cell_type"] == "code"
+        )
+        required_snippets = [
+            "import numpy as np",
+            "import pandas as pd",
+            "import matplotlib",
+            "import matplotlib.pyplot as plt",
+            "import seaborn as sns",
+            "pd.read_csv",
+            "sns.regplot",
+            "sns.heatmap",
+            "np.polyfit",
+        ]
+        for snippet in required_snippets:
+            self.assertIn(snippet, code)
 
     def test_notebook_uses_formal_academic_wording(self):
         text = NOTEBOOK.read_text(encoding="utf-8")
@@ -121,21 +155,24 @@ class KyotoAutumnOutputsTest(unittest.TestCase):
             code_cells.append(source)
 
         script = "\n\n# ---- next notebook cell ----\n\n".join(code_cells)
+        env = os.environ.copy()
+        env.setdefault("MPLBACKEND", "Agg")
         result = subprocess.run(
             [sys.executable, "-c", script],
             cwd=ROOT,
             text=True,
             capture_output=True,
-            timeout=30,
+            timeout=90,
             check=False,
+            env=env,
         )
         self.assertEqual(
             result.returncode,
             0,
             "notebook code cells failed\nSTDOUT:\n"
-            + result.stdout[-2000:]
+            + result.stdout[-3000:]
             + "\nSTDERR:\n"
-            + result.stderr[-2000:],
+            + result.stderr[-3000:],
         )
 
 
