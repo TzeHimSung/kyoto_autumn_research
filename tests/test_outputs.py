@@ -12,8 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SUMMARY = ROOT / "data" / "processed" / "kyoto_koyo_temperature_2010_2025_summary.csv"
 DAILY = ROOT / "data" / "raw" / "kyoto_daily_temperature_oct_dec_2010_2025.csv"
 CORRELATIONS = ROOT / "data" / "processed" / "correlation_results.csv"
-REPORT = ROOT / "reports" / "kyoto_autumn_temperature_correlation_2010_2025.md"
-NOTEBOOK = ROOT / "notebooks" / "kyoto_autumn_research_workflow.ipynb"
+NOTEBOOK = ROOT / "kyoto_autumn_research_workflow.ipynb"
 
 
 def read_csv(path: Path):
@@ -27,9 +26,13 @@ def read_notebook():
 
 class KyotoAutumnOutputsTest(unittest.TestCase):
     def test_expected_artifacts_exist(self):
-        for path in [SUMMARY, DAILY, CORRELATIONS, REPORT, NOTEBOOK]:
+        for path in [SUMMARY, DAILY, CORRELATIONS, NOTEBOOK]:
             self.assertTrue(path.exists(), f"missing artifact: {path.relative_to(ROOT)}")
             self.assertGreater(path.stat().st_size, 100, f"artifact too small: {path.relative_to(ROOT)}")
+
+    def test_notebook_is_at_repository_root(self):
+        self.assertEqual(NOTEBOOK.parent, ROOT)
+        self.assertTrue(NOTEBOOK.exists())
 
     def test_summary_has_expected_years_and_official_red_dates(self):
         rows = {int(row["year"]): row for row in read_csv(SUMMARY)}
@@ -44,8 +47,14 @@ class KyotoAutumnOutputsTest(unittest.TestCase):
     def test_daily_temperature_covers_october_to_december_for_all_years(self):
         rows = read_csv(DAILY)
         self.assertEqual(len(rows), 16 * (31 + 30 + 31))
-        months = {(int(row["year"]), int(row["month"])) for row in rows}
-        self.assertEqual(months, {(year, month) for year in range(2010, 2026) for month in (10, 11, 12)})
+        counts = {}
+        for row in rows:
+            key = (int(row["year"]), int(row["month"]))
+            counts[key] = counts.get(key, 0) + 1
+        expected_counts = {10: 31, 11: 30, 12: 31}
+        self.assertEqual(set(counts), {(year, month) for year in range(2010, 2026) for month in (10, 11, 12)})
+        for (year, month), count in counts.items():
+            self.assertEqual(count, expected_counts[month], f"unexpected row count for {year}-{month:02d}")
 
     def test_november_temperature_has_strong_positive_correlation_with_later_red_leaf_date(self):
         rows = {row["metric"]: row for row in read_csv(CORRELATIONS)}
@@ -55,13 +64,7 @@ class KyotoAutumnOutputsTest(unittest.TestCase):
         self.assertGreater(r, 0.70)
         self.assertTrue(math.isclose(slope, 2.979, abs_tol=0.02))
 
-    def test_report_contains_source_urls_and_practical_window(self):
-        text = REPORT.read_text(encoding="utf-8")
-        self.assertIn("https://www.data.jma.go.jp/sakura/data/ruinenchi/015.csv", text)
-        self.assertIn("11月28日—12月10日", text)
-        self.assertIn("11月均温每升高 1°C", text)
-
-    def test_notebook_has_workflow_sections_and_charts(self):
+    def test_notebook_contains_sources_practical_window_sections_and_charts(self):
         notebook = read_notebook()
         self.assertEqual(notebook["nbformat"], 4)
         markdown = "\n".join(
@@ -69,8 +72,10 @@ class KyotoAutumnOutputsTest(unittest.TestCase):
             for cell in notebook["cells"]
             if cell["cell_type"] == "markdown"
         )
-        for phrase in ["数据获取", "数据清洗", "计算分析", "图表辅助", "总结结论"]:
+        for phrase in ["研究问题", "数据来源", "数据清洗", "统计分析", "结果可视化", "结论"]:
             self.assertIn(phrase, markdown)
+        self.assertIn("https://www.data.jma.go.jp/sakura/data/ruinenchi/015.csv", markdown)
+        self.assertIn("11月28日—12月10日", markdown)
 
         svg_outputs = 0
         for cell in notebook["cells"]:
@@ -79,6 +84,20 @@ class KyotoAutumnOutputsTest(unittest.TestCase):
                 if "<svg" in html_output:
                     svg_outputs += 1
         self.assertGreaterEqual(svg_outputs, 3)
+
+    def test_notebook_uses_formal_academic_wording(self):
+        text = NOTEBOOK.read_text(encoding="utf-8")
+        banned_phrases = [
+            "给人读的",
+            "业务流程",
+            "业务问题",
+            "业务结论",
+            "不必过度恐慌",
+            "最有用的一张",
+            "这张图",
+        ]
+        for phrase in banned_phrases:
+            self.assertNotIn(phrase, text)
 
     def test_notebook_has_no_secrets_or_concrete_delivery_targets(self):
         text = NOTEBOOK.read_text(encoding="utf-8")

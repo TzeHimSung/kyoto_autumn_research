@@ -39,7 +39,6 @@ NORMAL_RED_DATE_MONTH_DAY = (12, 5)  # JMA 1991-2020 normal for Kyoto kaede red 
 SUMMARY_PATH = ROOT / "data" / "processed" / "kyoto_koyo_temperature_2010_2025_summary.csv"
 DAILY_PATH = ROOT / "data" / "raw" / "kyoto_daily_temperature_oct_dec_2010_2025.csv"
 CORRELATION_PATH = ROOT / "data" / "processed" / "correlation_results.csv"
-REPORT_PATH = ROOT / "reports" / "kyoto_autumn_temperature_correlation_2010_2025.md"
 
 
 def fetch_bytes(url: str) -> bytes:
@@ -415,120 +414,9 @@ def write_correlations(correlations: list[dict[str, object]]) -> None:
             writer.writerow({column: fmt_csv(row[column]) for column in columns})
 
 
-def md_table(headers: list[str], rows: list[list[str]]) -> str:
-    lines = ["| " + " | ".join(headers) + " |", "|" + "|".join(["---"] * len(headers)) + "|"]
-    lines.extend("| " + " | ".join(row) + " |" for row in rows)
-    return "\n".join(lines)
-
-
-def write_report(summary: dict[int, dict[str, object]], correlations: list[dict[str, object]], normal_date: str) -> None:
-    REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    corr_by_metric = {str(row["metric"]): row for row in correlations}
-
-    annual_rows = []
-    for year in YEARS:
-        row = summary[year]
-        annual_rows.append(
-            [
-                str(year),
-                str(row["red_md"] or "缺测"),
-                "" if row["delay_vs_dec5_days"] is None else f"{int(row['delay_vs_dec5_days']):+d}天",
-                f"{float(row['oct_mean_c']):.2f}",
-                f"{float(row['nov_mean_c']):.2f}",
-                f"{float(row['oct_nov_mean_c']):.2f}",
-                f"{float(row['nov_dec10_mean_c']):.2f}",
-                str(row["nov_dec10_days_le_10c"]),
-            ]
-        )
-
-    corr_rows = []
-    labels = {
-        "oct_nov_mean_c": "10-11月均温",
-        "nov_mean_c": "11月均温",
-        "nov_dec10_mean_c": "11/1-12/10均温",
-        "nov_dec10_days_le_10c": "11/1-12/10 日均≤10°C天数",
-        "dec_mean_c": "12月均温",
-        "oct_mean_c": "10月均温",
-    }
-    for metric in labels:
-        row = corr_by_metric[metric]
-        corr_rows.append(
-            [
-                labels[metric],
-                str(row["n"]),
-                f"{float(row['pearson_r']):+.3f}",
-                f"{float(row['slope_days_per_unit']):+.2f}",
-                f"{float(row['r2']):.3f}",
-            ]
-        )
-
-    nov = corr_by_metric["nov_mean_c"]
-    oct_nov = corr_by_metric["oct_nov_mean_c"]
-    cold = corr_by_metric["nov_dec10_days_le_10c"]
-
-    text = f"""# 京都红叶季与气温关系：2010-2025
-
-## 摘要
-
-本研究把“红叶季时间”定义为气象厅京都地方气象台的官方 `かえでの紅葉日`（枫叶红叶日），并抓取京都站 2010—2025 年 10 月、11 月、12 月每日气温，探索气温与红叶时间偏差的关系。
-
-关键发现：
-
-- 京都官方枫叶红叶平年日为 `{normal_date}`，即 12 月 5 日。
-- 2021 年京都 `かえでの紅葉` 在气象厅累年 CSV 中为 0，按缺测处理；相关性分析使用 15 个有效年份。
-- 10 月单独解释力弱；11 月温度更关键。
-- 11月均温每升高 1°C，官方红叶日大约推迟 {float(nov['slope_days_per_unit']):.1f} 天（Pearson r={float(nov['pearson_r']):.3f}）。
-- 10—11月均温的相关性最高：r={float(oct_nov['pearson_r']):.3f}，每 +1°C 约晚 {float(oct_nov['slope_days_per_unit']):.1f} 天。
-- 11/1—12/10 期间日均温 ≤10°C 的天数越多，红叶越早：r={float(cold['pearson_r']):.3f}。
-
-## 数据源
-
-1. 气象厅生物季节观测累年值 CSV：かえで紅葉
-   {PHENOLOGY_URL}
-
-2. 气象厅过去天气数据：京都站日别值
-   {WEATHER_URL_TEMPLATE.replace('{year}', 'YYYY').replace('{month}', 'MM')}
-
-## 年度汇总
-
-{md_table(['年份', '官方红叶日', '较12/5', '10月均温°C', '11月均温°C', '10-11月均温°C', '11/1-12/10均温°C', '11/1-12/10≤10°C天数'], annual_rows)}
-
-## 相关性结果
-
-{md_table(['指标', '有效年份', 'Pearson r', '斜率：天/单位', 'R²'], corr_rows)}
-
-## 旅行攻略解释
-
-如果你要做抗偏差的京都红叶攻略，核心不是盯着 10 月，而是持续观察 11 月降温节奏。
-
-- 11 月均温接近 11—12°C：红叶大概率正常或偏早，核心行程可押 11 月下旬到 12 月上旬。
-- 11 月均温约 12.5—13.5°C：大概率略晚，更稳窗口是 11 月底到 12 月 10 日。
-- 11 月均温 ≥14°C：明显偏晚风险上升，核心赏枫日应往 12 月上旬到中旬靠。
-- 10 月热但 11 月中旬后转冷：不必过度恐慌，2025 年就是这种类型，最终只比平年晚 5 天。
-- 10 月热、11 月也持续暖，尤其 11 月下旬仍不冷：要防 2024 年那种大幅推迟。
-
-最稳通用窗口：11月28日—12月10日。
-偏暖年份备用窗口：12月3日—12月14日。
-偏冷年份可提前到：11月22日—12月5日。
-
-## 限制
-
-- 官方 `かえでの紅葉日` 是跨年份稳定指标，但不等价于所有寺社的旅游“见顷”日。
-- 京都山区、高雄、大原、贵船、鞍马通常早于市区；清水寺、东福寺、下鸭神社等低海拔/市区景点可能更晚。
-- 样本只有 15 个有效年份，适合判断方向和大致偏差，不适合精确预测某一天。
-
-## 复现
-
-```bash
-python3 scripts/fetch_and_analyze.py
-python3 -m unittest discover -s tests -v
-```
-"""
-    REPORT_PATH.write_text(text, encoding="utf-8")
-
 
 def main() -> None:
-    red_dates, remarks, normal_date = parse_phenology()
+    red_dates, remarks, _normal_date = parse_phenology()
     daily_rows = fetch_daily_weather()
     summary = build_summary(red_dates, remarks, daily_rows)
     correlations = build_correlations(summary)
@@ -536,12 +424,10 @@ def main() -> None:
     write_daily(daily_rows)
     write_summary(summary)
     write_correlations(correlations)
-    write_report(summary, correlations, normal_date)
 
     print(f"Wrote {DAILY_PATH.relative_to(ROOT)}")
     print(f"Wrote {SUMMARY_PATH.relative_to(ROOT)}")
     print(f"Wrote {CORRELATION_PATH.relative_to(ROOT)}")
-    print(f"Wrote {REPORT_PATH.relative_to(ROOT)}")
 
 
 if __name__ == "__main__":
