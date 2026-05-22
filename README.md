@@ -20,6 +20,15 @@
 - 显著偏暖年份：12月3日—12月14日
 - 明显偏冷年份：11月22日—12月5日
 
+推荐阅读顺序：
+
+1. `notebooks/kyoto_autumn_research_workflow.ipynb`
+   - 最适合阅读：按数据获取、数据清洗、计算分析、图表辅助、总结结论组织。
+2. `reports/kyoto_autumn_temperature_correlation_2010_2025.md`
+   - 纯 Markdown 研究报告。
+3. `data/processed/*.csv`
+   - 机器可读的年度汇总和相关性结果。
+
 完整报告见：
 
 - `reports/kyoto_autumn_temperature_correlation_2010_2025.md`
@@ -46,6 +55,8 @@
 │   ├── methodology.md
 │   └── plans/
 │       └── 2026-05-22-initial-kyoto-autumn-analysis.md
+├── notebooks/
+│   └── kyoto_autumn_research_workflow.ipynb
 ├── reports/
 │   └── kyoto_autumn_temperature_correlation_2010_2025.md
 ├── scripts/
@@ -72,8 +83,9 @@ python3 -m unittest discover -s tests -v
 
 ## 关键文件
 
+- `notebooks/kyoto_autumn_research_workflow.ipynb`：面向阅读的业务流程 notebook，含图表。
 - `scripts/fetch_and_analyze.py`：抓取、解析、计算、生成报告的一体化脚本。
-- `tests/test_outputs.py`：验证官方关键年份、每日气温覆盖范围、相关性方向与报告内容。
+- `tests/test_outputs.py`：验证官方关键年份、每日气温覆盖范围、相关性方向、notebook 结构与报告内容。
 - `docs/methodology.md`：方法、字段定义、限制说明。
 
 ## 解释边界

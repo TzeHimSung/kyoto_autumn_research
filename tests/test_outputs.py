@@ -1,5 +1,9 @@
 import csv
+import json
 import math
+import re
+import subprocess
+import sys
 import unittest
 from pathlib import Path
 
@@ -9,6 +13,7 @@ SUMMARY = ROOT / "data" / "processed" / "kyoto_koyo_temperature_2010_2025_summar
 DAILY = ROOT / "data" / "raw" / "kyoto_daily_temperature_oct_dec_2010_2025.csv"
 CORRELATIONS = ROOT / "data" / "processed" / "correlation_results.csv"
 REPORT = ROOT / "reports" / "kyoto_autumn_temperature_correlation_2010_2025.md"
+NOTEBOOK = ROOT / "notebooks" / "kyoto_autumn_research_workflow.ipynb"
 
 
 def read_csv(path: Path):
@@ -16,9 +21,13 @@ def read_csv(path: Path):
         return list(csv.DictReader(f))
 
 
+def read_notebook():
+    return json.loads(NOTEBOOK.read_text(encoding="utf-8"))
+
+
 class KyotoAutumnOutputsTest(unittest.TestCase):
     def test_expected_artifacts_exist(self):
-        for path in [SUMMARY, DAILY, CORRELATIONS, REPORT]:
+        for path in [SUMMARY, DAILY, CORRELATIONS, REPORT, NOTEBOOK]:
             self.assertTrue(path.exists(), f"missing artifact: {path.relative_to(ROOT)}")
             self.assertGreater(path.stat().st_size, 100, f"artifact too small: {path.relative_to(ROOT)}")
 
@@ -51,6 +60,64 @@ class KyotoAutumnOutputsTest(unittest.TestCase):
         self.assertIn("https://www.data.jma.go.jp/sakura/data/ruinenchi/015.csv", text)
         self.assertIn("11月28日—12月10日", text)
         self.assertIn("11月均温每升高 1°C", text)
+
+    def test_notebook_has_workflow_sections_and_charts(self):
+        notebook = read_notebook()
+        self.assertEqual(notebook["nbformat"], 4)
+        markdown = "\n".join(
+            "".join(cell.get("source", []))
+            for cell in notebook["cells"]
+            if cell["cell_type"] == "markdown"
+        )
+        for phrase in ["数据获取", "数据清洗", "计算分析", "图表辅助", "总结结论"]:
+            self.assertIn(phrase, markdown)
+
+        svg_outputs = 0
+        for cell in notebook["cells"]:
+            for output in cell.get("outputs", []):
+                html_output = output.get("data", {}).get("text/html", "")
+                if "<svg" in html_output:
+                    svg_outputs += 1
+        self.assertGreaterEqual(svg_outputs, 3)
+
+    def test_notebook_has_no_secrets_or_concrete_delivery_targets(self):
+        text = NOTEBOOK.read_text(encoding="utf-8")
+        forbidden = [
+            r"telegram:-?\d{6,}",
+            r"weixin:[^\s,'\"`]+@im\.wechat",
+            r"(?i)(api_key|secret|password|token|passwd)\s*=\s*['\"][^'\"]{6,}['\"]",
+        ]
+        for pattern in forbidden:
+            self.assertIsNone(re.search(pattern, text), f"forbidden pattern found: {pattern}")
+
+    def test_notebook_code_cells_smoke_execute(self):
+        notebook = read_notebook()
+        code_cells = []
+        for cell in notebook["cells"]:
+            if cell["cell_type"] != "code":
+                continue
+            source = "".join(cell.get("source", []))
+            if source.lstrip().startswith(("%", "!")):
+                continue
+            code_cells.append(source)
+
+        script = "\n\n# ---- next notebook cell ----\n\n".join(code_cells)
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            timeout=30,
+            check=False,
+        )
+        self.assertEqual(
+            result.returncode,
+            0,
+            "notebook code cells failed\nSTDOUT:\n"
+            + result.stdout[-2000:]
+            + "\nSTDERR:\n"
+            + result.stderr[-2000:],
+        )
 
 
 if __name__ == "__main__":
