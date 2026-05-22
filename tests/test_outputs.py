@@ -98,6 +98,33 @@ class KyotoAutumnOutputsTest(unittest.TestCase):
                     rich_figure_outputs += 1
         self.assertGreaterEqual(rich_figure_outputs, 4)
 
+    def test_each_table_and_figure_has_reading_guidance_and_explanation(self):
+        notebook = read_notebook()
+        markdown = "\n".join(
+            "".join(cell.get("source", []))
+            for cell in notebook["cells"]
+            if cell["cell_type"] == "markdown"
+        )
+
+        expected_items = [
+            ("表 1：年度观测与气温指标", "表格说明"),
+            ("表 2：日别气温覆盖检查", "表格说明"),
+            ("表 3：缺测处理规则", "表格说明"),
+            ("表 4：温度指标与红叶延迟的统计关系", "表格说明"),
+            ("图 1：年度红叶偏移与 11 月均温", "图表说明"),
+            ("图 2：11 月均温与红叶延迟的回归关系", "图表说明"),
+            ("图 3：温度指标相关性排序", "图表说明"),
+            ("图 4：10—12 月日别降温轨迹", "图表说明"),
+        ]
+        for title, explanation_label in expected_items:
+            with self.subTest(title=title):
+                start = markdown.find(title)
+                self.assertNotEqual(start, -1, f"missing title: {title}")
+                section = markdown[start : start + 900]
+                self.assertIn("**阅读方法：**", section)
+                self.assertIn(f"**{explanation_label}：**", section)
+                self.assertGreaterEqual(len(section), 160)
+
     def test_notebook_uses_scientific_python_stack(self):
         notebook = read_notebook()
         code = "\n".join(
