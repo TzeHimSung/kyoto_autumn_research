@@ -160,6 +160,53 @@ class KyotoAutumnOutputsTest(unittest.TestCase):
         for phrase in banned_phrases:
             self.assertNotIn(phrase, text)
 
+    def test_notebook_has_no_encoding_smells(self):
+        raw_text = NOTEBOOK.read_text(encoding="utf-8")
+        notebook = read_notebook()
+
+        slash = "\\"
+        byte_escape_pattern = re.escape(slash + "x") + r"[0-9A-Fa-f]{2}"
+        unicode_degree_c_pattern = re.escape(slash + "u00") + r"[bB]0[cC]"
+        mojibake_markers = [chr(0x00C2), chr(0x00C3), chr(0x00E2)]
+        replacement_character = chr(0xFFFD)
+
+        forbidden_patterns = {
+            byte_escape_pattern: "literal Python byte escape",
+            unicode_degree_c_pattern: "escaped degree-Celsius unit instead of literal °C",
+            **{re.escape(marker): "common UTF-8 mojibake marker" for marker in mojibake_markers},
+            re.escape(replacement_character): "Unicode replacement character",
+        }
+        for pattern, description in forbidden_patterns.items():
+            with self.subTest(pattern=pattern):
+                self.assertIsNone(
+                    re.search(pattern, raw_text),
+                    f"notebook contains {description}",
+                )
+
+        def iter_strings(value, path="notebook"):
+            if isinstance(value, str):
+                yield path, value
+            elif isinstance(value, list):
+                for index, item in enumerate(value):
+                    yield from iter_strings(item, f"{path}[{index}]")
+            elif isinstance(value, dict):
+                for key, item in value.items():
+                    yield from iter_strings(item, f"{path}.{key}")
+
+        parsed_forbidden = {
+            byte_escape_pattern: "literal Python byte escape",
+            **{re.escape(marker): "common UTF-8 mojibake marker" for marker in mojibake_markers},
+            re.escape(replacement_character): "Unicode replacement character",
+        }
+        for path, value in iter_strings(notebook):
+            for pattern, description in parsed_forbidden.items():
+                self.assertIsNone(
+                    re.search(pattern, value),
+                    f"{path} contains {description}: {value[:120]!r}",
+                )
+
+        self.assertIn("°C", raw_text)
+
     def test_notebook_has_no_secrets_or_concrete_delivery_targets(self):
         text = NOTEBOOK.read_text(encoding="utf-8")
         forbidden = [
