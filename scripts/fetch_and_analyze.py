@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fetch and analyze Kyoto autumn foliage / temperature data.
+"""Fetch and analyze Kyoto autumn foliage / weather driver data.
 
 This script intentionally uses only the Python standard library so the research
 repo can be reproduced on a fresh machine without package installation.
@@ -34,6 +34,7 @@ WEATHER_URL_TEMPLATE = (
 USER_AGENT = "Mozilla/5.0 (kyoto-autumn-research; reproducible research script)"
 YEARS = range(2010, 2026)
 MONTHS = (10, 11, 12)
+EXPECTED_DAILY_CELLS = 21
 NORMAL_RED_DATE_MONTH_DAY = (12, 5)  # JMA 1991-2020 normal for Kyoto kaede red leaves.
 
 SUMMARY_PATH = ROOT / "data" / "processed" / "kyoto_koyo_temperature_2010_2025_summary.csv"
@@ -92,6 +93,13 @@ def parse_float(value: str) -> float | None:
     return float(match.group(0)) if match else None
 
 
+def parse_precip_float(value: str) -> float | None:
+    value = value.strip()
+    if value == "--":
+        return 0.0
+    return parse_float(value)
+
+
 def clean_cell(cell_html: str) -> str:
     cell_html = re.sub(r"<script.*?</script>", "", cell_html, flags=re.S)
     text = re.sub(r"<[^>]+>", "", cell_html)
@@ -109,19 +117,37 @@ def parse_daily_weather_page(year: int, month: int) -> list[dict[str, object]]:
     for row_html in row_htmls:
         cells = re.findall(r"<td[^>]*>(.*?)</td>", row_html, flags=re.S)
         values = [clean_cell(cell) for cell in cells]
-        if len(values) < 9:
+        if not values or not values[0].isdigit():
             continue
         day = int(values[0])
         date = dt.date(year, month, day)
+        if len(values) < EXPECTED_DAILY_CELLS:
+            raise RuntimeError(
+                f"Unexpected JMA daily row layout for {date.isoformat()}: "
+                f"parsed {len(values)} cells, expected at least {EXPECTED_DAILY_CELLS}"
+            )
+
+        def cell(index: int) -> str:
+            return values[index] if index < len(values) else ""
+
         output.append(
             {
                 "date": date.isoformat(),
                 "year": year,
                 "month": month,
                 "day": day,
-                "t_mean_c": parse_float(values[6]),
-                "t_max_c": parse_float(values[7]),
-                "t_min_c": parse_float(values[8]),
+                "precip_total_mm": parse_precip_float(cell(3)),
+                "t_mean_c": parse_float(cell(6)),
+                "t_max_c": parse_float(cell(7)),
+                "t_min_c": parse_float(cell(8)),
+                "humidity_mean_pct": parse_float(cell(9)),
+                "humidity_min_pct": parse_float(cell(10)),
+                "wind_mean_ms": parse_float(cell(11)),
+                "wind_max_ms": parse_float(cell(12)),
+                "gust_max_ms": parse_float(cell(14)),
+                "sunshine_hours": parse_float(cell(16)),
+                "weather_day": cell(19),
+                "weather_night": cell(20),
                 "source_url": url,
             }
         )
@@ -163,6 +189,69 @@ def average(values: Iterable[float | None]) -> float | None:
 
 def count_threshold(rows: Iterable[dict[str, object]], threshold: float) -> int:
     return sum(1 for row in rows if row["t_mean_c"] is not None and row_float(row, "t_mean_c") <= threshold)
+
+
+def sum_values(rows: Iterable[dict[str, object]], key: str) -> float | None:
+    clean = [row_float(row, key) for row in rows if row[key] is not None]
+    return sum(clean) if clean else None
+
+
+def max_value(rows: Iterable[dict[str, object]], key: str) -> float | None:
+    clean = [row_float(row, key) for row in rows if row[key] is not None]
+    return max(clean) if clean else None
+
+
+def count_le(rows: Iterable[dict[str, object]], key: str, threshold: float) -> int:
+    return sum(1 for row in rows if row[key] is not None and row_float(row, key) <= threshold)
+
+
+def count_ge(rows: Iterable[dict[str, object]], key: str, threshold: float) -> int:
+    return sum(1 for row in rows if row[key] is not None and row_float(row, key) >= threshold)
+
+
+def diurnal_range(row: dict[str, object]) -> float | None:
+    if row["t_max_c"] is None or row["t_min_c"] is None:
+        return None
+    return row_float(row, "t_max_c") - row_float(row, "t_min_c")
+
+
+def average_diurnal_range(rows: Iterable[dict[str, object]]) -> float | None:
+    return average(diurnal_range(row) for row in rows)
+
+
+def count_diurnal_range_ge(rows: Iterable[dict[str, object]], threshold: float) -> int:
+    ranges = (diurnal_range(row) for row in rows)
+    return sum(1 for value in ranges if value is not None and value >= threshold)
+
+
+def count_sunny_cold_nights(rows: Iterable[dict[str, object]], sunshine_threshold: float, min_temp_threshold: float) -> int:
+    return sum(
+        1
+        for row in rows
+        if row["sunshine_hours"] is not None
+        and row["t_min_c"] is not None
+        and row_float(row, "sunshine_hours") >= sunshine_threshold
+        and row_float(row, "t_min_c") <= min_temp_threshold
+    )
+
+
+def first_threshold_date(
+    rows: list[dict[str, object]],
+    year: int,
+    key: str,
+    threshold: float,
+    *,
+    start_month: int,
+    start_day: int,
+) -> dt.date | None:
+    start_date = dt.date(year, start_month, start_day)
+    for row in sorted(rows, key=lambda item: str(item["date"])):
+        date = dt.date.fromisoformat(str(row["date"]))
+        if date < start_date or row[key] is None:
+            continue
+        if row_float(row, key) <= threshold:
+            return date
+    return None
 
 
 def first_trailing_5d_mean_le(rows: list[dict[str, object]], year: int, threshold: float) -> dt.date | None:
@@ -267,6 +356,7 @@ def build_summary(red_dates: dict[int, dt.date | None], remarks: dict[int, str],
         delay = (red_date - dt.date(year, *NORMAL_RED_DATE_MONTH_DAY)).days if red_date else None
         first_5d_le_12 = first_trailing_5d_mean_le(rows, year, 12)
         first_5d_le_10 = first_trailing_5d_mean_le(rows, year, 10)
+        first_min_le_8 = first_threshold_date(rows, year, "t_min_c", 8, start_month=11, start_day=1)
 
         summary[year] = {
             "year": year,
@@ -280,6 +370,24 @@ def build_summary(red_dates: dict[int, dt.date | None], remarks: dict[int, str],
             "oct_nov_mean_c": average(row_float(row, "t_mean_c") for row in oct_nov_rows),
             "nov_dec10_mean_c": average(row_float(row, "t_mean_c") for row in nov_dec10_rows),
             "nov16_dec10_mean_c": average(row_float(row, "t_mean_c") for row in nov16_dec10_rows),
+            "nov_min_mean_c": average(row_float(row, "t_min_c") for row in nov_rows),
+            "nov_dec10_min_mean_c": average(row_float(row, "t_min_c") for row in nov_dec10_rows),
+            "nov_min_days_le_8c": count_le(nov_rows, "t_min_c", 8),
+            "nov_min_days_le_5c": count_le(nov_rows, "t_min_c", 5),
+            "first_min_le_8": first_min_le_8.isoformat() if first_min_le_8 else "",
+            "first_min_le_8_day_from_oct1": day_from_oct1(first_min_le_8, year) if first_min_le_8 else None,
+            "nov_diurnal_range_mean_c": average_diurnal_range(nov_rows),
+            "nov_dec10_diurnal_range_mean_c": average_diurnal_range(nov_dec10_rows),
+            "nov_days_range_ge_10c": count_diurnal_range_ge(nov_rows, 10),
+            "nov_sunshine_hours_total": sum_values(nov_rows, "sunshine_hours"),
+            "nov_dec10_sunshine_hours_total": sum_values(nov_dec10_rows, "sunshine_hours"),
+            "sunny_cold_nights_nov_dec10": count_sunny_cold_nights(nov_dec10_rows, 5, 8),
+            "oct_nov_precip_total_mm": sum_values(oct_nov_rows, "precip_total_mm"),
+            "nov_precip_total_mm": sum_values(nov_rows, "precip_total_mm"),
+            "rain_days_nov": count_ge(nov_rows, "precip_total_mm", 1),
+            "heavy_rain_days_after_nov15": count_ge(nov16_dec10_rows, "precip_total_mm", 20),
+            "max_gust_nov_dec10_ms": max_value(nov_dec10_rows, "gust_max_ms"),
+            "windy_days_after_nov15": count_ge(nov16_dec10_rows, "gust_max_ms", 10),
             "nov_days_le_10c": count_threshold(nov_rows, 10),
             "nov_days_le_12c": count_threshold(nov_rows, 12),
             "nov_dec10_days_le_10c": count_threshold(nov_dec10_rows, 10),
@@ -296,6 +404,8 @@ def build_summary(red_dates: dict[int, dt.date | None], remarks: dict[int, str],
 def as_optional_float(value: object) -> float | None:
     if value is None or value == "":
         return None
+    if isinstance(value, float):
+        return float(f"{value:.6f}")
     return float(str(value))
 
 
@@ -307,6 +417,23 @@ def build_correlations(summary: dict[int, dict[str, object]]) -> list[dict[str, 
         "oct_nov_mean_c",
         "nov_dec10_mean_c",
         "nov16_dec10_mean_c",
+        "nov_min_mean_c",
+        "nov_dec10_min_mean_c",
+        "nov_min_days_le_8c",
+        "nov_min_days_le_5c",
+        "first_min_le_8_day_from_oct1",
+        "nov_diurnal_range_mean_c",
+        "nov_dec10_diurnal_range_mean_c",
+        "nov_days_range_ge_10c",
+        "nov_sunshine_hours_total",
+        "nov_dec10_sunshine_hours_total",
+        "sunny_cold_nights_nov_dec10",
+        "oct_nov_precip_total_mm",
+        "nov_precip_total_mm",
+        "rain_days_nov",
+        "heavy_rain_days_after_nov15",
+        "max_gust_nov_dec10_ms",
+        "windy_days_after_nov15",
         "nov_days_le_10c",
         "nov_days_le_12c",
         "nov_dec10_days_le_10c",
@@ -347,7 +474,25 @@ def fmt_csv(value: object) -> str:
 
 def write_daily(daily_rows: list[dict[str, object]]) -> None:
     DAILY_PATH.parent.mkdir(parents=True, exist_ok=True)
-    columns = ["date", "year", "month", "day", "t_mean_c", "t_max_c", "t_min_c", "source_url"]
+    columns = [
+        "date",
+        "year",
+        "month",
+        "day",
+        "precip_total_mm",
+        "t_mean_c",
+        "t_max_c",
+        "t_min_c",
+        "humidity_mean_pct",
+        "humidity_min_pct",
+        "wind_mean_ms",
+        "wind_max_ms",
+        "gust_max_ms",
+        "sunshine_hours",
+        "weather_day",
+        "weather_night",
+        "source_url",
+    ]
     with DAILY_PATH.open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=columns, lineterminator="\n")
         writer.writeheader()
@@ -368,12 +513,32 @@ def write_summary(summary: dict[int, dict[str, object]]) -> None:
         "oct_nov_mean_c",
         "nov_dec10_mean_c",
         "nov16_dec10_mean_c",
+        "nov_min_mean_c",
+        "nov_dec10_min_mean_c",
+        "nov_min_days_le_8c",
+        "nov_min_days_le_5c",
+        "first_min_le_8",
+        "first_min_le_8_day_from_oct1",
+        "nov_diurnal_range_mean_c",
+        "nov_dec10_diurnal_range_mean_c",
+        "nov_days_range_ge_10c",
+        "nov_sunshine_hours_total",
+        "nov_dec10_sunshine_hours_total",
+        "sunny_cold_nights_nov_dec10",
+        "oct_nov_precip_total_mm",
+        "nov_precip_total_mm",
+        "rain_days_nov",
+        "heavy_rain_days_after_nov15",
+        "max_gust_nov_dec10_ms",
+        "windy_days_after_nov15",
         "nov_days_le_10c",
         "nov_days_le_12c",
         "nov_dec10_days_le_10c",
         "nov_dec10_days_le_12c",
         "first_5d_mean_le_12",
         "first_5d_mean_le_10",
+        "first_5d_le_12_day_from_oct1",
+        "first_5d_le_10_day_from_oct1",
         "red_rm",
     ]
     with SUMMARY_PATH.open("w", newline="", encoding="utf-8") as f:
@@ -384,6 +549,14 @@ def write_summary(summary: dict[int, dict[str, object]]) -> None:
             for integer_column in [
                 "year",
                 "delay_vs_dec5_days",
+                "nov_min_days_le_8c",
+                "nov_min_days_le_5c",
+                "first_min_le_8_day_from_oct1",
+                "nov_days_range_ge_10c",
+                "sunny_cold_nights_nov_dec10",
+                "rain_days_nov",
+                "heavy_rain_days_after_nov15",
+                "windy_days_after_nov15",
                 "nov_days_le_10c",
                 "nov_days_le_12c",
                 "nov_dec10_days_le_10c",

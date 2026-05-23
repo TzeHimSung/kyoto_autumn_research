@@ -1,5 +1,6 @@
 import csv
 import importlib
+import importlib.util
 import json
 import math
 import os
@@ -68,6 +69,112 @@ class KyotoAutumnOutputsTest(unittest.TestCase):
         for (year, month), count in counts.items():
             self.assertEqual(count, expected_counts[month], f"unexpected row count for {year}-{month:02d}")
 
+    def test_daily_weather_includes_expanded_driver_columns(self):
+        with DAILY.open(newline="", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            rows = list(reader)
+            fieldnames = set(reader.fieldnames or [])
+
+        expected_columns = {
+            "precip_total_mm",
+            "humidity_mean_pct",
+            "humidity_min_pct",
+            "wind_mean_ms",
+            "wind_max_ms",
+            "gust_max_ms",
+            "sunshine_hours",
+            "weather_day",
+            "weather_night",
+        }
+        self.assertTrue(expected_columns <= fieldnames)
+
+        sample = next(row for row in rows if row["date"] == "2025-11-01")
+        self.assertEqual(sample["precip_total_mm"], "0.000000")
+        self.assertEqual(sample["t_mean_c"], "15.700000")
+        self.assertEqual(sample["t_min_c"], "12.200000")
+        self.assertEqual(sample["sunshine_hours"], "5.200000")
+        self.assertEqual(sample["weather_day"], "曇後晴一時雨")
+
+        dry_sample = next(row for row in rows if row["date"] == "2010-10-01")
+        self.assertEqual(dry_sample["precip_total_mm"], "0.000000")
+
+    def test_summary_and_correlations_include_expanded_weather_drivers(self):
+        with SUMMARY.open(newline="", encoding="utf-8") as f:
+            summary_reader = csv.DictReader(f)
+            summary_rows = list(summary_reader)
+            summary_fields = set(summary_reader.fieldnames or [])
+
+        expected_summary_columns = {
+            "nov_min_mean_c",
+            "nov_dec10_min_mean_c",
+            "nov_min_days_le_8c",
+            "nov_min_days_le_5c",
+            "first_min_le_8",
+            "first_min_le_8_day_from_oct1",
+            "nov_diurnal_range_mean_c",
+            "nov_dec10_diurnal_range_mean_c",
+            "nov_days_range_ge_10c",
+            "nov_sunshine_hours_total",
+            "nov_dec10_sunshine_hours_total",
+            "sunny_cold_nights_nov_dec10",
+            "oct_nov_precip_total_mm",
+            "nov_precip_total_mm",
+            "rain_days_nov",
+            "heavy_rain_days_after_nov15",
+            "max_gust_nov_dec10_ms",
+            "windy_days_after_nov15",
+            "first_5d_le_12_day_from_oct1",
+            "first_5d_le_10_day_from_oct1",
+        }
+        self.assertTrue(expected_summary_columns <= summary_fields)
+
+        row_2025 = next(row for row in summary_rows if row["year"] == "2025")
+        for column in expected_summary_columns:
+            self.assertNotEqual(row_2025[column], "", f"missing 2025 value for {column}")
+
+        correlation_metrics = {row["metric"] for row in read_csv(CORRELATIONS)}
+        expected_correlation_metrics = {
+            "nov_min_mean_c",
+            "nov_diurnal_range_mean_c",
+            "nov_sunshine_hours_total",
+            "nov_precip_total_mm",
+            "max_gust_nov_dec10_ms",
+        }
+        self.assertTrue(expected_correlation_metrics <= correlation_metrics)
+
+    def test_correlation_results_recompute_from_serialized_summary_csv(self):
+        spec = importlib.util.spec_from_file_location(
+            "fetch_and_analyze", ROOT / "scripts" / "fetch_and_analyze.py"
+        )
+        self.assertIsNotNone(spec)
+        assert spec is not None
+        module = importlib.util.module_from_spec(spec)
+        self.assertIsNotNone(spec.loader)
+        assert spec.loader is not None
+        spec.loader.exec_module(module)
+
+        summary_rows = {int(row["year"]): row for row in read_csv(SUMMARY)}
+        recomputed = {row["metric"]: row for row in module.build_correlations(summary_rows)}
+        stored = {row["metric"]: row for row in read_csv(CORRELATIONS)}
+        self.assertEqual(set(recomputed), set(stored))
+
+        for metric, expected in stored.items():
+            actual = recomputed[metric]
+            with self.subTest(metric=metric):
+                self.assertEqual(actual["n"], int(expected["n"]))
+                for column in [
+                    "pearson_r",
+                    "spearman_r",
+                    "slope_days_per_unit",
+                    "intercept_days",
+                    "r2",
+                    "residual_se_days",
+                ]:
+                    self.assertTrue(
+                        math.isclose(float(actual[column]), float(expected[column]), abs_tol=5e-7),
+                        f"{metric} {column}: recomputed={actual[column]} stored={expected[column]}",
+                    )
+
     def test_november_temperature_has_strong_positive_correlation_with_later_red_leaf_date(self):
         rows = {row["metric"]: row for row in read_csv(CORRELATIONS)}
         nov = rows["nov_mean_c"]
@@ -107,13 +214,13 @@ class KyotoAutumnOutputsTest(unittest.TestCase):
         )
 
         expected_items = [
-            ("表 1：年度观测与气温指标", "表格说明"),
-            ("表 2：日别气温覆盖检查", "表格说明"),
+            ("表 1：年度观测与天气指标", "表格说明"),
+            ("表 2：日别天气覆盖检查", "表格说明"),
             ("表 3：缺测处理规则", "表格说明"),
-            ("表 4：温度指标与红叶延迟的统计关系", "表格说明"),
+            ("表 4：天气指标与红叶延迟的统计关系", "表格说明"),
             ("图 1：年度红叶偏移与 11 月均温", "图表说明"),
             ("图 2：11 月均温与红叶延迟的回归关系", "图表说明"),
-            ("图 3：温度指标相关性排序", "图表说明"),
+            ("图 3：天气指标相关性排序", "图表说明"),
             ("图 4：10—12 月日别降温轨迹", "图表说明"),
         ]
         for title, explanation_label in expected_items:
